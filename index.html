@@ -2,206 +2,7 @@
 <html lang="nl">
 
 
-<script>
-const MSAL_CONFIG = {
-  auth: {
-    clientId: "0a963723-862c-4c2c-abb6-e5de94de930d",
-    authority: "https://login.microsoftonline.com/ee31ae08-cb02-40c6-9aee-f9941f12cb5c",
-    redirectUri: window.location.href.split('?')[0],
-  },
-  cache: { cacheLocation: "sessionStorage" }
-};
 
-const DATAVERSE_URL = "https://org36f4e9e0.crm4.dynamics.com";
-const DATAVERSE_SCOPE = ["https://org36f4e9e0.crm4.dynamics.com/user_impersonation"];
-
-const msalInstance = new msal.PublicClientApplication(MSAL_CONFIG);
-let currentAccount = null;
-let accessToken = null;
-
-async function initAuth() {
-  await msalInstance.initialize();
-  
-  // Handle redirect
-  try {
-    const response = await msalInstance.handleRedirectPromise();
-    if (response) {
-      currentAccount = response.account;
-      accessToken = response.accessToken;
-    }
-  } catch(e) { console.error(e); }
-
-  // Check if already logged in
-  const accounts = msalInstance.getAllAccounts();
-  if (accounts.length > 0) {
-    currentAccount = accounts[0];
-    await getToken();
-  } else {
-    // Login via redirect
-    showLoginScreen();
-    return;
-  }
-  
-  document.getElementById('loginScreen').style.display = 'none';
-  document.getElementById('appContent').style.display = 'block';
-  document.getElementById('userInfo').textContent = currentAccount.name || currentAccount.username;
-  
-  // Laad data uit Dataverse
-  await laadCatalogusUitDataverse();
-  renderDashboard();
-  populateFilters();
-}
-
-function showLoginScreen() {
-  document.getElementById('loginScreen').style.display = 'flex';
-  document.getElementById('appContent').style.display = 'none';
-}
-
-async function login() {
-  await msalInstance.loginRedirect({ scopes: DATAVERSE_SCOPE });
-}
-
-async function getToken() {
-  try {
-    const result = await msalInstance.acquireTokenSilent({
-      scopes: DATAVERSE_SCOPE,
-      account: currentAccount
-    });
-    accessToken = result.accessToken;
-  } catch(e) {
-    await msalInstance.acquireTokenRedirect({ scopes: DATAVERSE_SCOPE });
-  }
-}
-
-// ── DATAVERSE API ──
-async function dvGet(entity, select, filter) {
-  await getToken();
-  let url = `${DATAVERSE_URL}/api/data/v9.2/${entity}`;
-  const params = [];
-  if (select) params.push(`$select=${select}`);
-  if (filter) params.push(`$filter=${filter}`);
-  if (params.length) url += '?' + params.join('&');
-  
-  const resp = await fetch(url, {
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'OData-MaxVersion': '4.0',
-      'OData-Version': '4.0',
-      'Accept': 'application/json',
-      'Content-Type': 'application/json'
-    }
-  });
-  if (!resp.ok) throw new Error(`Dataverse GET fout: ${resp.status}`);
-  const data = await resp.json();
-  return data.value;
-}
-
-async function dvPost(entity, body) {
-  await getToken();
-  const resp = await fetch(`${DATAVERSE_URL}/api/data/v9.2/${entity}`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'OData-MaxVersion': '4.0',
-      'OData-Version': '4.0',
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-      'Prefer': 'return=representation'
-    },
-    body: JSON.stringify(body)
-  });
-  if (!resp.ok) throw new Error(`Dataverse POST fout: ${resp.status}`);
-  return await resp.json();
-}
-
-async function dvPatch(entity, id, body) {
-  await getToken();
-  const resp = await fetch(`${DATAVERSE_URL}/api/data/v9.2/${entity}(${id})`, {
-    method: 'PATCH',
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'OData-MaxVersion': '4.0',
-      'OData-Version': '4.0',
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(body)
-  });
-  if (!resp.ok) throw new Error(`Dataverse PATCH fout: ${resp.status}`);
-}
-
-async function dvDelete(entity, id) {
-  await getToken();
-  const resp = await fetch(`${DATAVERSE_URL}/api/data/v9.2/${entity}(${id})`, {
-    method: 'DELETE',
-    headers: { 'Authorization': `Bearer ${accessToken}` }
-  });
-  if (!resp.ok) throw new Error(`Dataverse DELETE fout: ${resp.status}`);
-}
-
-// ── LAAD CATALOGUS UIT DATAVERSE ──
-async function laadCatalogusUitDataverse() {
-  try {
-    document.getElementById('loadingBanner').style.display = 'flex';
-    // Laad AE_Catalogus
-    const items = await dvGet('cr7a9_ae_cataloguses', 
-      'cr7a9_ae_catalogusid,cr7a9_serialnumber,cr7a9_customernumber,cr7a9_description,cr7a9_category,cr7a9_subcategory,cr7a9_tonnagecapacity,cr7a9_location,cr7a9_inspectionstatusdescriptionnl,cr7a9_linkcertificaat,cr7a9_status'
-    );
-    
-    // Map naar ons CAT formaat: [serial, client, desc, cat, subcat, tonnage, locatie, link, link_url, lev, huur]
-    CAT.length = 0; // Clear
-    items.forEach(item => {
-      CAT.push([
-        item.cr7a9_serialnumber || '',
-        item.cr7a9_customernumber || '',
-        item.cr7a9_description || '',
-        item.cr7a9_category || '',
-        item.cr7a9_subcategory || '',
-        item.cr7a9_tonnagecapacity || '',
-        item.cr7a9_location || '',
-        '', // link display
-        item.cr7a9_linkcertificaat || '',
-        '', // leverancier
-        '', // huur tot
-        item.cr7a9_ae_catalogusid // ID voor updates
-      ]);
-    });
-
-    // Laad bewegingen
-    const bew = await dvGet('cr7a9_ae_bewegingens',
-      'cr7a9_ae_bewegingenid,cr7a9_type,cr7a9_serialnumber,cr7a9_datum,cr7a9_projectreferentie,cr7a9_werf,cr7a9_ampm,cr7a9_vervoerder,cr7a9_retourGepland,cr7a9_retourbevestigd'
-    );
-    bewegingen.length = 0;
-    bew.forEach(b => {
-      bewegingen.push({
-        id: b.cr7a9_ae_bewegingenid,
-        type: b.cr7a9_type === 1 ? 'vertrek' : 'retour',
-        serial: b.cr7a9_serialnumber || '',
-        datum: b.cr7a9_datum ? b.cr7a9_datum.split('T')[0] : '',
-        project: b.cr7a9_projectreferentie || '',
-        werf: b.cr7a9_werf || '',
-        ampm: b.cr7a9_ampm || '',
-        vervoer: b.cr7a9_vervoerder || '',
-        retourGepland: b.cr7a9_retourGepland ? b.cr7a9_retourGepland.split('T')[0] : '',
-        retour: b.cr7a9_retourbevestigd || false,
-      });
-      if (b.cr7a9_type === 1 && !b.cr7a9_retourbevestigd) {
-        statusMap[b.cr7a9_serialnumber] = 'Op werf';
-      }
-    });
-
-    document.getElementById('loadingBanner').style.display = 'none';
-    console.log(`Geladen: ${CAT.length} items, ${bewegingen.length} bewegingen`);
-  } catch(e) {
-    document.getElementById('loadingBanner').style.display = 'none';
-    console.error('Dataverse laad fout:', e);
-    // Fallback naar localStorage
-    console.log('Fallback naar lokale data');
-  }
-}
-
-// Init bij laden
-window.addEventListener('load', initAuth);
-</script>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -386,7 +187,15 @@ function showLoginScreen() {
 }
 
 async function login() {
-  await msalInstance.loginRedirect({ scopes: DATAVERSE_SCOPE });
+  try {
+    await msalInstance.loginRedirect({ 
+      scopes: DATAVERSE_SCOPE,
+      prompt: 'select_account'
+    });
+  } catch(e) {
+    console.error('Login fout:', e);
+    alert('Login fout: ' + e.message);
+  }
 }
 
 async function getToken() {
