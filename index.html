@@ -335,9 +335,9 @@ a.certlink { color: var(--blue); text-decoration: underline; font-size: 11px; }
 <script>
 const JSONBIN_API_KEY = '$2a$10$tRUfAFLQ.6H6FfHRkXUoiu8mmlX8v3hMb4Uf4LriCWh6Oz2Oswbo6';
 const JSONBIN_BASE = 'https://api.jsonbin.io/v3';
-let BIN_BEWEGINGEN = null;
-let BIN_EXTERN = null;
-let BIN_STATUS = null;
+let BIN_BEWEGINGEN = '6a67b194da38895dfe980d91';
+let BIN_EXTERN = '6a67b1bada38895dfe980e5c';
+let BIN_STATUS = '6a67b1a9f5f4af5e29c98946';
 let BIN_AMPM = null;
 
 // Wachtwoord check
@@ -365,7 +365,10 @@ document.addEventListener('keydown', e => {
 // JSONBin helpers
 async function jbGet(binId) {
   const r = await fetch(`${JSONBIN_BASE}/b/${binId}/latest`, {
-    headers: { 'X-Access-Key': JSONBIN_API_KEY }
+    headers: { 
+      'X-Access-Key': JSONBIN_API_KEY,
+      'X-Bin-Meta': 'false'
+    }
   });
   const d = await r.json();
   return d.record;
