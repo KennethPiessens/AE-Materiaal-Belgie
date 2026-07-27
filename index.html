@@ -1,8 +1,7 @@
 <!DOCTYPE html>
 <html lang="nl">
 
-<!-- MSAL authenticatie voor Dataverse -->
-<script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js"></script>
+
 <script>
 const MSAL_CONFIG = {
   auth: {
@@ -331,29 +330,181 @@ a.certlink { color: var(--blue); text-decoration: underline; font-size: 11px; }
 .sep { height: 1px; background: var(--border); margin: 16px 0; }
 .flex-between { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 </style>
+
+<!-- WACHTWOORD + JSONBIN -->
+<script>
+const JSONBIN_API_KEY = '$2a$10$tRUfAFLQ.6H6FfHRkXUoiu8mmlX8v3hMb4Uf4LriCWh6Oz2Oswbo6';
+const JSONBIN_BASE = 'https://api.jsonbin.io/v3';
+let BIN_BEWEGINGEN = null;
+let BIN_EXTERN = null;
+let BIN_STATUS = null;
+let BIN_AMPM = null;
+
+// Wachtwoord check
+const APP_PASSWORD = 'mammoet2026';
+
+function checkPassword() {
+  const pw = document.getElementById('pwInput').value;
+  if (pw === APP_PASSWORD) {
+    document.getElementById('pwScreen').style.display = 'none';
+    document.getElementById('mainApp').style.display = 'block';
+    initJsonBin();
+  } else {
+    document.getElementById('pwError').style.display = 'block';
+    document.getElementById('pwInput').value = '';
+    document.getElementById('pwInput').focus();
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && document.getElementById('pwScreen').style.display !== 'none') {
+    checkPassword();
+  }
+});
+
+// JSONBin helpers
+async function jbGet(binId) {
+  const r = await fetch(`${JSONBIN_BASE}/b/${binId}/latest`, {
+    headers: { 'X-Access-Key': JSONBIN_API_KEY }
+  });
+  const d = await r.json();
+  return d.record;
+}
+
+async function jbUpdate(binId, data) {
+  await fetch(`${JSONBIN_BASE}/b/${binId}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Access-Key': JSONBIN_API_KEY
+    },
+    body: JSON.stringify(data)
+  });
+}
+
+async function jbCreate(name, data) {
+  const r = await fetch(`${JSONBIN_BASE}/b`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Access-Key': JSONBIN_API_KEY,
+      'X-Bin-Name': name,
+      'X-Bin-Private': 'false'
+    },
+    body: JSON.stringify(data)
+  });
+  const d = await r.json();
+  return d.metadata.id;
+}
+
+// Sla bin IDs op in localStorage
+function saveBinIds() {
+  localStorage.setItem('jb_bewegingen', BIN_BEWEGINGEN || '');
+  localStorage.setItem('jb_extern', BIN_EXTERN || '');
+  localStorage.setItem('jb_status', BIN_STATUS || '');
+  localStorage.setItem('jb_ampm', BIN_AMPM || '');
+}
+
+async function initJsonBin() {
+  document.getElementById('saveBadge').textContent = 'Data laden...';
+  
+  BIN_BEWEGINGEN = localStorage.getItem('jb_bewegingen') || null;
+  BIN_EXTERN     = localStorage.getItem('jb_extern') || null;
+  BIN_STATUS     = localStorage.getItem('jb_status') || null;
+  BIN_AMPM       = localStorage.getItem('jb_ampm') || null;
+
+  try {
+    // Laad of maak bins aan
+    if (BIN_BEWEGINGEN) {
+      const d = await jbGet(BIN_BEWEGINGEN);
+      bewegingen = d || [];
+    } else {
+      BIN_BEWEGINGEN = await jbCreate('AE-Bewegingen', []);
+    }
+
+    if (BIN_EXTERN) {
+      const d = await jbGet(BIN_EXTERN);
+      externLijst = d || [];
+    } else {
+      BIN_EXTERN = await jbCreate('AE-Extern', []);
+    }
+
+    if (BIN_STATUS) {
+      const d = await jbGet(BIN_STATUS);
+      statusMap = d || {};
+    } else {
+      BIN_STATUS = await jbCreate('AE-Status', {});
+    }
+
+    if (BIN_AMPM) {
+      const d = await jbGet(BIN_AMPM);
+      if (d && d.length > 0) ampmLijst = d;
+    } else {
+      BIN_AMPM = await jbCreate('AE-AMPM', ampmLijst);
+    }
+
+    saveBinIds();
+    document.getElementById('saveBadge').textContent = '✅ Verbonden met JSONBin';
+  } catch(e) {
+    console.error('JSONBin fout:', e);
+    document.getElementById('saveBadge').textContent = '⚠️ Offline — lokale data';
+  }
+
+  renderDashboard();
+  populateFilters();
+  populateAmpmSelect();
+}
+
+// Override save functie
+const origSave = save;
+async function save() {
+  // Lokaal opslaan
+  localStorage.setItem('mm_status', JSON.stringify(statusMap));
+  localStorage.setItem('mm_bew', JSON.stringify(bewegingen));
+  
+  const now = new Date();
+  document.getElementById('saveBadge').textContent = `Opgeslagen ${now.toLocaleTimeString('nl-BE',{hour:'2-digit',minute:'2-digit'})}`;
+  
+  // JSONBin opslaan (async, niet blokkeren)
+  if (BIN_BEWEGINGEN) jbUpdate(BIN_BEWEGINGEN, bewegingen).catch(console.error);
+  if (BIN_STATUS)     jbUpdate(BIN_STATUS, statusMap).catch(console.error);
+}
+
+async function saveExtern() {
+  localStorage.setItem('mm_extern', JSON.stringify(externLijst));
+  if (BIN_EXTERN) jbUpdate(BIN_EXTERN, externLijst).catch(console.error);
+}
+
+async function saveAmpm() {
+  localStorage.setItem('mm_ampm', JSON.stringify(ampmLijst));
+  if (BIN_AMPM) jbUpdate(BIN_AMPM, ampmLijst).catch(console.error);
+}
+</script>
 </head>
 <body>
 
-<!-- LOGIN SCHERM -->
-<div id="loginScreen" style="display:none;position:fixed;inset:0;background:var(--red);z-index:9999;flex-direction:column;align-items:center;justify-content:center;color:white">
+<!-- WACHTWOORDSCHERM -->
+<div id="pwScreen" style="position:fixed;inset:0;background:var(--red);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;color:white">
   <div style="font-size:28px;font-weight:700;margin-bottom:8px">MAMMOET BELGIUM NV</div>
   <div style="font-size:16px;opacity:.75;margin-bottom:40px">AE-Materiaal Beheersysteem</div>
-  <button onclick="login()" style="background:white;color:var(--red);border:none;padding:14px 32px;border-radius:6px;font-size:16px;font-weight:700;cursor:pointer">
-    🔐 Aanmelden met Mammoet-account
-  </button>
-  <div style="margin-top:16px;font-size:12px;opacity:.6">Log in met je @mammoet.com account</div>
+  <div style="background:rgba(255,255,255,.1);border-radius:8px;padding:32px;text-align:center;min-width:320px">
+    <div style="font-size:14px;margin-bottom:16px;opacity:.85">Voer het toegangswachtwoord in</div>
+    <input id="pwInput" type="password" placeholder="Wachtwoord..." 
+      style="width:100%;padding:12px;border-radius:6px;border:none;font-size:16px;margin-bottom:12px;text-align:center">
+    <div id="pwError" style="display:none;color:#ffcccc;font-size:13px;margin-bottom:10px">❌ Ongeldig wachtwoord</div>
+    <button onclick="checkPassword()" 
+      style="width:100%;background:white;color:var(--red);border:none;padding:12px;border-radius:6px;font-size:15px;font-weight:700;cursor:pointer">
+      🔐 Aanmelden
+    </button>
+  </div>
+  <div style="margin-top:20px;font-size:12px;opacity:.5">Mammoet Belgium NV — Depot Gent</div>
 </div>
 
-<!-- LOADING BANNER -->
-<div id="loadingBanner" style="display:none;position:fixed;top:0;left:0;right:0;background:var(--red);color:white;padding:12px;text-align:center;z-index:998;font-size:13px">
-  ⏳ Data laden uit Dataverse...
-</div>
-
-<!-- APP CONTENT -->
-<div id="appContent" style="display:none">
+<!-- MAIN APP -->
+<div id="mainApp" style="display:none">
 <header>
   <div class="logo">MAMMOET BELGIUM NV <span>AE-Materiaal Beheersysteem</span></div>
-  <div style="display:flex;gap:10px;align-items:center"><span id="userInfo" style="font-size:12px;opacity:.75"></span><div class="hbadge" id="saveBadge">Verbonden met Dataverse</div></div>
+  <div style="display:flex;gap:10px;align-items:center"><div class="hbadge" id="saveBadge">Verbonden met JSONBin</div></div>
 </header>
 <nav>
   <button class="active" onclick="showTab('dashboard',this)">📊 Dashboard</button>
@@ -2062,6 +2213,6 @@ populateAmpmSelect();
 renderDashboard();
 populateFilters();
 </script>
-</div><!-- end appContent -->
+</div><!-- end mainApp -->
 </body>
 </html>
