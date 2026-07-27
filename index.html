@@ -339,7 +339,7 @@ const MSAL_CONFIG = {
   auth: {
     clientId: "0a963723-862c-4c2c-abb6-e5de94de930d",
     authority: "https://login.microsoftonline.com/ee31ae08-cb02-40c6-9aee-f9941f12cb5c",
-    redirectUri: "https://kennethpiessens.github.io/AE-Materiaal-Belgie/",
+    redirectUri: window.location.origin + window.location.pathname,
   },
   cache: { cacheLocation: "sessionStorage" }
 };
