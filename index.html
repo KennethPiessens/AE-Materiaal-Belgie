@@ -331,183 +331,211 @@ a.certlink { color: var(--blue); text-decoration: underline; font-size: 11px; }
 .flex-between { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 </style>
 
-<!-- WACHTWOORD + JSONBIN -->
+
+<!-- MSAL authenticatie voor Dataverse -->
+<script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js"></script>
 <script>
-const JSONBIN_API_KEY = '$2a$10$tRUfAFLQ.6H6FfHRkXUoiu8mmlX8v3hMb4Uf4LriCWh6Oz2Oswbo6';
-const JSONBIN_BASE = 'https://api.jsonbin.io/v3';
-let BIN_BEWEGINGEN = '6a67b194da38895dfe980d91';
-let BIN_EXTERN = '6a67b1bada38895dfe980e5c';
-let BIN_STATUS = '6a67b1a9f5f4af5e29c98946';
-let BIN_AMPM = null;
+const MSAL_CONFIG = {
+  auth: {
+    clientId: "0a963723-862c-4c2c-abb6-e5de94de930d",
+    authority: "https://login.microsoftonline.com/ee31ae08-cb02-40c6-9aee-f9941f12cb5c",
+    redirectUri: "https://kennethpiessens.github.io/AE-Materiaal-Belgie/",
+  },
+  cache: { cacheLocation: "sessionStorage" }
+};
 
-// Wachtwoord check
-const APP_PASSWORD = 'mammoet2026';
+const DATAVERSE_URL = "https://org36f4e9e0.crm4.dynamics.com";
+const DATAVERSE_SCOPE = ["https://org36f4e9e0.crm4.dynamics.com/user_impersonation"];
 
-function checkPassword() {
-  const pw = document.getElementById('pwInput').value;
-  if (pw === APP_PASSWORD) {
-    document.getElementById('pwScreen').style.display = 'none';
-    document.getElementById('mainApp').style.display = 'block';
-    initJsonBin();
-  } else {
-    document.getElementById('pwError').style.display = 'block';
-    document.getElementById('pwInput').value = '';
-    document.getElementById('pwInput').focus();
-  }
-}
+const msalInstance = new msal.PublicClientApplication(MSAL_CONFIG);
+let currentAccount = null;
+let accessToken = null;
 
-document.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && document.getElementById('pwScreen').style.display !== 'none') {
-    checkPassword();
-  }
-});
-
-// JSONBin helpers
-async function jbGet(binId) {
-  const r = await fetch(`${JSONBIN_BASE}/b/${binId}/latest`, {
-    headers: { 
-      'X-Access-Key': JSONBIN_API_KEY,
-      'X-Bin-Meta': 'false'
-    }
-  });
-  const d = await r.json();
-  return d.record;
-}
-
-async function jbUpdate(binId, data) {
-  await fetch(`${JSONBIN_BASE}/b/${binId}`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Access-Key': JSONBIN_API_KEY
-    },
-    body: JSON.stringify(data)
-  });
-}
-
-async function jbCreate(name, data) {
-  const r = await fetch(`${JSONBIN_BASE}/b`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Access-Key': JSONBIN_API_KEY,
-      'X-Bin-Name': name,
-      'X-Bin-Private': 'false'
-    },
-    body: JSON.stringify(data)
-  });
-  const d = await r.json();
-  return d.metadata.id;
-}
-
-// Sla bin IDs op in localStorage
-function saveBinIds() {
-  localStorage.setItem('jb_bewegingen', BIN_BEWEGINGEN || '');
-  localStorage.setItem('jb_extern', BIN_EXTERN || '');
-  localStorage.setItem('jb_status', BIN_STATUS || '');
-  localStorage.setItem('jb_ampm', BIN_AMPM || '');
-}
-
-async function initJsonBin() {
-  document.getElementById('saveBadge').textContent = 'Data laden...';
-  
-  BIN_BEWEGINGEN = localStorage.getItem('jb_bewegingen') || null;
-  BIN_EXTERN     = localStorage.getItem('jb_extern') || null;
-  BIN_STATUS     = localStorage.getItem('jb_status') || null;
-  BIN_AMPM       = localStorage.getItem('jb_ampm') || null;
-
+async function initAuth() {
+  await msalInstance.initialize();
   try {
-    // Laad of maak bins aan
-    if (BIN_BEWEGINGEN) {
-      const d = await jbGet(BIN_BEWEGINGEN);
-      bewegingen = d || [];
-    } else {
-      BIN_BEWEGINGEN = await jbCreate('AE-Bewegingen', []);
+    const response = await msalInstance.handleRedirectPromise();
+    if (response) {
+      currentAccount = response.account;
+      accessToken = response.accessToken;
     }
+  } catch(e) { console.error(e); }
 
-    if (BIN_EXTERN) {
-      const d = await jbGet(BIN_EXTERN);
-      externLijst = d || [];
-    } else {
-      BIN_EXTERN = await jbCreate('AE-Extern', []);
-    }
-
-    if (BIN_STATUS) {
-      const d = await jbGet(BIN_STATUS);
-      statusMap = d || {};
-    } else {
-      BIN_STATUS = await jbCreate('AE-Status', {});
-    }
-
-    if (BIN_AMPM) {
-      const d = await jbGet(BIN_AMPM);
-      if (d && d.length > 0) ampmLijst = d;
-    } else {
-      BIN_AMPM = await jbCreate('AE-AMPM', ampmLijst);
-    }
-
-    saveBinIds();
-    document.getElementById('saveBadge').textContent = '✅ Verbonden met JSONBin';
-  } catch(e) {
-    console.error('JSONBin fout:', e);
-    document.getElementById('saveBadge').textContent = '⚠️ Offline — lokale data';
+  const accounts = msalInstance.getAllAccounts();
+  if (accounts.length > 0) {
+    currentAccount = accounts[0];
+    await getToken();
+  } else {
+    showLoginScreen();
+    return;
   }
-
+  
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('mainApp').style.display = 'block';
+  document.getElementById('userBadge').textContent = currentAccount.name || currentAccount.username;
+  
+  await laadDataUitDataverse();
   renderDashboard();
   populateFilters();
   populateAmpmSelect();
 }
 
-// Override save functie
-const origSave = save;
+function showLoginScreen() {
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('mainApp').style.display = 'none';
+}
+
+async function login() {
+  await msalInstance.loginRedirect({ scopes: DATAVERSE_SCOPE });
+}
+
+async function getToken() {
+  try {
+    const result = await msalInstance.acquireTokenSilent({
+      scopes: DATAVERSE_SCOPE,
+      account: currentAccount
+    });
+    accessToken = result.accessToken;
+  } catch(e) {
+    await msalInstance.acquireTokenRedirect({ scopes: DATAVERSE_SCOPE });
+  }
+}
+
+async function dvGet(entity, select, filter) {
+  await getToken();
+  let url = `${DATAVERSE_URL}/api/data/v9.2/${entity}`;
+  const params = [];
+  if (select) params.push(`$select=${select}`);
+  if (filter) params.push(`$filter=${filter}`);
+  if (params.length) url += '?' + params.join('&');
+  const resp = await fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'OData-MaxVersion': '4.0',
+      'OData-Version': '4.0',
+      'Accept': 'application/json',
+    }
+  });
+  if (!resp.ok) throw new Error(`Dataverse GET fout: ${resp.status}`);
+  const data = await resp.json();
+  return data.value;
+}
+
+async function dvPost(entity, body) {
+  await getToken();
+  const resp = await fetch(`${DATAVERSE_URL}/api/data/v9.2/${entity}`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'OData-MaxVersion': '4.0',
+      'OData-Version': '4.0',
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'Prefer': 'return=representation'
+    },
+    body: JSON.stringify(body)
+  });
+  if (!resp.ok) throw new Error(`Dataverse POST fout: ${resp.status}`);
+  return await resp.json();
+}
+
+async function dvPatch(entity, id, body) {
+  await getToken();
+  const resp = await fetch(`${DATAVERSE_URL}/api/data/v9.2/${entity}(${id})`, {
+    method: 'PATCH',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'OData-MaxVersion': '4.0',
+      'OData-Version': '4.0',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+  if (!resp.ok) throw new Error(`Dataverse PATCH fout: ${resp.status}`);
+}
+
+async function laadDataUitDataverse() {
+  try {
+    document.getElementById('saveBadge').textContent = '⏳ Data laden...';
+    
+    const bew = await dvGet('cr7a9_ae_bewegingens',
+      'cr7a9_ae_bewegingenid,cr7a9_type,cr7a9_serialnumber,cr7a9_datum,cr7a9_projectreferentie,cr7a9_werf,cr7a9_ampm,cr7a9_vervoerder,cr7a9_retourgepland,cr7a9_retourbevestigd'
+    );
+    bewegingen.length = 0;
+    bew.forEach(b => {
+      bewegingen.push({
+        dvId: b.cr7a9_ae_bewegingenid,
+        type: b.cr7a9_type === 1 ? 'vertrek' : 'retour',
+        serial: b.cr7a9_serialnumber || '',
+        datum: b.cr7a9_datum ? b.cr7a9_datum.split('T')[0] : '',
+        project: b.cr7a9_projectreferentie || '',
+        werf: b.cr7a9_werf || '',
+        ampm: b.cr7a9_ampm || '',
+        vervoer: b.cr7a9_vervoerder || '',
+        retourGepland: b.cr7a9_retourgepland ? b.cr7a9_retourgepland.split('T')[0] : '',
+        retour: b.cr7a9_retourbevestigd || false,
+      });
+      if (b.cr7a9_type === 1 && !b.cr7a9_retourbevestigd) {
+        statusMap[b.cr7a9_serialnumber] = 'Op werf';
+      }
+    });
+
+    const ext = await dvGet('cr7a9_ae_externs',
+      'cr7a9_ae_externsid,cr7a9_description,cr7a9_supplier,cr7a9_tonnage,cr7a9_hirefrom,cr7a9_hireto,cr7a9_project,cr7a9_site,cr7a9_ampm,cr7a9_transporter,cr7a9_active'
+    );
+    externLijst.length = 0;
+    ext.forEach(e => {
+      externLijst.push({
+        dvId: e.cr7a9_ae_externsid,
+        id: Date.parse(e.cr7a9_hirefrom),
+        desc: e.cr7a9_description || '',
+        lev: e.cr7a9_supplier || '',
+        ton: e.cr7a9_tonnage || '',
+        van: e.cr7a9_hirefrom ? e.cr7a9_hirefrom.split('T')[0] : '',
+        huur: e.cr7a9_hireto ? e.cr7a9_hireto.split('T')[0] : '',
+        project: e.cr7a9_project || '',
+        werf: e.cr7a9_site || '',
+        ampm: e.cr7a9_ampm || '',
+        vervoer: e.cr7a9_transporter || '',
+        actief: e.cr7a9_active !== false,
+      });
+    });
+
+    document.getElementById('saveBadge').textContent = '✅ Verbonden met Dataverse';
+  } catch(e) {
+    console.error('Dataverse laad fout:', e);
+    document.getElementById('saveBadge').textContent = '⚠️ Dataverse fout — lokale data';
+  }
+}
+
+// Override save voor Dataverse
 async function save() {
-  // Lokaal opslaan
   localStorage.setItem('mm_status', JSON.stringify(statusMap));
   localStorage.setItem('mm_bew', JSON.stringify(bewegingen));
-  
   const now = new Date();
   document.getElementById('saveBadge').textContent = `Opgeslagen ${now.toLocaleTimeString('nl-BE',{hour:'2-digit',minute:'2-digit'})}`;
-  
-  // JSONBin opslaan (async, niet blokkeren)
-  if (BIN_BEWEGINGEN) jbUpdate(BIN_BEWEGINGEN, bewegingen).catch(console.error);
-  if (BIN_STATUS)     jbUpdate(BIN_STATUS, statusMap).catch(console.error);
 }
 
-async function saveExtern() {
-  localStorage.setItem('mm_extern', JSON.stringify(externLijst));
-  if (BIN_EXTERN) jbUpdate(BIN_EXTERN, externLijst).catch(console.error);
-}
-
-async function saveAmpm() {
-  localStorage.setItem('mm_ampm', JSON.stringify(ampmLijst));
-  if (BIN_AMPM) jbUpdate(BIN_AMPM, ampmLijst).catch(console.error);
-}
+window.addEventListener('load', initAuth);
 </script>
 </head>
 <body>
-
-<!-- WACHTWOORDSCHERM -->
-<div id="pwScreen" style="position:fixed;inset:0;background:var(--red);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;color:white">
+<!-- LOGIN SCHERM -->
+<div id="loginScreen" style="display:flex;position:fixed;inset:0;background:var(--red);z-index:9999;flex-direction:column;align-items:center;justify-content:center;color:white">
   <div style="font-size:28px;font-weight:700;margin-bottom:8px">MAMMOET BELGIUM NV</div>
   <div style="font-size:16px;opacity:.75;margin-bottom:40px">AE-Materiaal Beheersysteem</div>
-  <div style="background:rgba(255,255,255,.1);border-radius:8px;padding:32px;text-align:center;min-width:320px">
-    <div style="font-size:14px;margin-bottom:16px;opacity:.85">Voer het toegangswachtwoord in</div>
-    <input id="pwInput" type="password" placeholder="Wachtwoord..." 
-      style="width:100%;padding:12px;border-radius:6px;border:none;font-size:16px;margin-bottom:12px;text-align:center">
-    <div id="pwError" style="display:none;color:#ffcccc;font-size:13px;margin-bottom:10px">❌ Ongeldig wachtwoord</div>
-    <button onclick="checkPassword()" 
-      style="width:100%;background:white;color:var(--red);border:none;padding:12px;border-radius:6px;font-size:15px;font-weight:700;cursor:pointer">
-      🔐 Aanmelden
-    </button>
-  </div>
-  <div style="margin-top:20px;font-size:12px;opacity:.5">Mammoet Belgium NV — Depot Gent</div>
+  <button onclick="login()" style="background:white;color:var(--red);border:none;padding:14px 32px;border-radius:6px;font-size:16px;font-weight:700;cursor:pointer">
+    🔐 Aanmelden met Mammoet-account
+  </button>
+  <div style="margin-top:16px;font-size:12px;opacity:.6">Log in met je @mammoet.com account</div>
 </div>
 
 <!-- MAIN APP -->
 <div id="mainApp" style="display:none">
+
 <header>
   <div class="logo">MAMMOET BELGIUM NV <span>AE-Materiaal Beheersysteem</span></div>
-  <div style="display:flex;gap:10px;align-items:center"><div class="hbadge" id="saveBadge">Verbonden met JSONBin</div></div>
+  <div style="display:flex;gap:10px;align-items:center"><span id="userBadge" style="font-size:12px;opacity:.75;margin-right:8px"></span><div class="hbadge" id="saveBadge">Verbonden met JSONBin</div></div>
 </header>
 <nav>
   <button class="active" onclick="showTab('dashboard',this)">📊 Dashboard</button>
